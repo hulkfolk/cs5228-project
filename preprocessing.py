@@ -16,16 +16,15 @@ def filter_raw_data() -> Tuple:
     return tuple(ids_to_remove)
 
 
-def save_cleaned_data(ids_to_remove: Tuple):
-    x_df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
-    y_df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Ytrain.csv'))
+def process_x(ids: Tuple, source: str, destination: str):
+    x_df = pd.read_csv(source)
     # FIXME: text columns is removed temporarily
-    cleaned_x_df = x_df.drop(list(ids_to_remove)).drop(columns=['Id', 'Name', 'City', 'State', 'Zip', 'Bank', 'BankState', 'NAICS'])
+    cleaned_x_df = x_df.drop(list(ids)).drop(columns=['Id', 'Name', 'City', 'State', 'Zip', 'BankState', 'NAICS'])
     # convert date to float
     cleaned_x_df['ApprovalDate'] = cleaned_x_df['ApprovalDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').timestamp())
     cleaned_x_df['ApprovalFY'] = cleaned_x_df['ApprovalFY'].apply(
-        lambda x: datetime.strptime(x.replace('A', '').strip(), '%Y').timestamp() if re.match(r'^\d{4}A$', x) else datetime.strptime(x.strip(), '%Y').timestamp())
-    cleaned_x_df['DisbursementDate'] = cleaned_x_df['DisbursementDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').timestamp())
+        lambda x: datetime.strptime(str(x).replace('A', '').strip(), '%Y').timestamp() if re.match(r'^\d{4}A$', str(x).strip()) else datetime.strptime(str(x).strip(), '%Y').timestamp())
+    cleaned_x_df['DisbursementDate'] = cleaned_x_df['DisbursementDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').timestamp() if not pd.isnull(x) else x)
     # convert int to float
     cleaned_x_df['Term'] = cleaned_x_df['Term'].apply(lambda x: float(x))
     cleaned_x_df['NoEmp'] = cleaned_x_df['NoEmp'].apply(lambda x: float(x))
@@ -41,12 +40,20 @@ def save_cleaned_data(ids_to_remove: Tuple):
     # convert categorical data into float
     cleaned_x_df['RevLineCr'] = cleaned_x_df['RevLineCr'].map({'N': 0.0, 'Y': 1.0})
     cleaned_x_df['LowDoc'] = cleaned_x_df['LowDoc'].map({'N': 0.0, 'Y': 1.0})
+    banks = cleaned_x_df['Bank'].unique()
+    banks_index = {banks[i]: float(i) for i in range(len(banks))}
+    cleaned_x_df['Bank'] = cleaned_x_df['Bank'].map(banks_index)
 
-    cleaned_y_df = y_df.drop(list(ids_to_remove)).drop(columns=['Id'])
+    cleaned_x_df.to_csv(destination, index=False)
 
-    cleaned_x_df.to_csv('Xtrain.csv', index=False)
+
+def process_y(ids: Tuple, file_path: str):
+    y_df = pd.read_csv(file_path)
+    cleaned_y_df = y_df.drop(list(ids)).drop(columns=['Id'])
     cleaned_y_df.to_csv('Ytrain.csv', index=False)
 
 
 if __name__ == '__main__':
-    save_cleaned_data(filter_raw_data())
+    ids_to_remove = filter_raw_data()
+    process_x(ids_to_remove, os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'), 'Xtrain.csv')
+    process_y(ids_to_remove, os.path.join(os.path.dirname(__file__), 'raw_data', 'Ytrain.csv'))
