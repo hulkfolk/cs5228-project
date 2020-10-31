@@ -5,6 +5,13 @@ from datetime import datetime
 
 import pandas as pd
 
+def data_inspection():
+    df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
+    for (columnName, columnData) in df.iteritems():
+        print('{:17s} - {:10s} has {:3d} null records'.format(columnName,columnData.dtype.name,columnData.isnull().sum()))
+
+ 
+
 
 def filter_raw_data() -> Tuple:
     df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
