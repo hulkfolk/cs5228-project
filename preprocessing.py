@@ -4,6 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, date, timedelta
 
+CAT_FEATURES = ['City', 'State', 'Zip', 'Bank', 'BankState', 'NAICS', 'ApprovalDate', 'ApprovalFY',
+                'NewExist', 'FranchiseCode', 'UrbanRural', 'RevLineCr', 'LowDoc', 'DisbursementDate', 'Recession']
+
 NAICS_TO_INDUSTRY = {
     '11': 'AGS',
     '21': 'MINING',
@@ -50,6 +53,8 @@ def data_clean_up(records):
     for col in new_records:
         if col in DEFAULT_MAPPING:
             new_records[col].fillna(DEFAULT_MAPPING.get(col), inplace=True)
+    new_records["LowDoc"] = new_records.apply(lambda x: 'Undefined' if str(x.LowDoc.strip()) not in ('Y', 'N') else str(x.LowDoc.strip()), axis=1)
+    new_records["RevLineCr"] = new_records.apply(lambda x: {'0': 'N', '0.0': 'N', 'T': 'Y'}.get(str(x.RevLineCr.strip()), 'N') if str(x.RevLineCr.strip()) not in ('Y', 'N', 'Undefined') else str(x.RevLineCr.strip()), axis=1)
     new_records["DisbursementDate"] = new_records.apply(lambda x: x.ApprovalDate if str(x.DisbursementDate)=='nan' else x.DisbursementDate, axis=1)
     new_records.reset_index(drop=True, inplace=True)
     return new_records
@@ -77,18 +82,22 @@ def with_in_recession(row):
 
 def data_transformation(records):
     """Clean up dirty values, reformating number columns and create new features"""
-    records['Recession'] = records.apply(with_in_recession, axis=1)
+    # existing features
+    records['Zip'] = records['Zip'].apply(lambda x: str(x))
     records['NAICS'] = records['NAICS'].apply(lambda x: NAICS_TO_INDUSTRY.get(str(x)[0:2], 'NONE') if len(str(x)) >= 2 else 'NONE')
     records['FranchiseCode'] = records['FranchiseCode'].apply(lambda x: 'N' if x in ['0', '1', 0, 1] else 'Y')
     records['NewExist'] = records['NewExist'].apply(lambda x: str(x))
     records['DisbursementGross'] = records['DisbursementGross'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
     records['GrAppv'] = records['GrAppv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
     records['SBA_Appv'] = records['SBA_Appv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
-    records['DisGross_GrAppv'] = records['DisbursementGross'] / records['GrAppv']
-    records['DisGross_SBAAppv'] = records['DisbursementGross'] / records['SBA_Appv']
-    records['GrAppv_SBAAppv'] = records['GrAppv'] / records['SBA_Appv']
-    records['ApprovalFY'] = records.ApprovalDate.apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').date())
-    records['RevLineCr'] = records.RevLineCr.apply(lambda x: "Undefined" if x in ('0','T') else x )
+    records['ApprovalFY'] = records.ApprovalDate.apply(lambda x: str(datetime.strptime(x.strip(), '%d-%b-%y').year))
+
+    # new features
+    records['Recession'] = records.apply(with_in_recession, axis=1)
+    # records['DisGross_GrAppv'] = records['DisbursementGross'] / records['GrAppv']
+    # records['DisGross_SBAAppv'] = records['DisbursementGross'] / records['SBA_Appv']
+    # records['GrAppv_SBAAppv'] = records['GrAppv'] / records['SBA_Appv']
+
     return records
 
 def label_encoding(records):
