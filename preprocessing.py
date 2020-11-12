@@ -104,8 +104,7 @@ def label_encoding(records):
 def all_preprocess_without_label_encoding(records):
     records = data_clean_up(records)
     records = data_transformation(records)
-    encoded_records = label_encoding(records)
-    return encoded_records
+    return records
 
 def all_preprocess_with_label_encoding(records):
     records = data_clean_up(records)
