@@ -1,66 +1,114 @@
-import os
-import re
-from typing import Tuple
-from datetime import datetime
-
+import copy
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, date, timedelta
 
-def data_inspection():
-    df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
-    for (columnName, columnData) in df.iteritems():
-        print('{:17s} - {:10s} has {:3d} null records'.format(columnName,columnData.dtype.name,columnData.isnull().sum()))
+NAICS_TO_INDUSTRY = {
+    '11': 'AGS',
+    '21': 'MINING',
+    '22': 'UTILITIES',
+    '23': 'CONSTRUCTION',
+    '31': 'MANUFACTURING',
+    '32': 'MANUFACTURING',
+    '33': 'MANUFACTURING',
+    '42': 'WHOLESALE_TRADE',
+    '44': 'RETAIL_TRADE',
+    '45': 'RETAIL_TRADE',
+    '48': 'TRANSPORTATION_WAREHOUSING',
+    '49': 'TRANSPORTATION_WAREHOUSING',
+    '51': 'INFORMATION',
+    '52': 'FINANCE_INSURANCE',
+    '53': 'REAL_ESTATE',
+    '54': 'SERVICES',
+    '55': 'MANAGEMENT',
+    '56': 'ADMIN',
+    '61': 'EDU',
+    '62': 'HEALTHCARE',
+    '71': 'ENTERTAINMENT',
+    '72': 'ACCOMMODATION_FOOD',
+    '81': 'OTHER_SERVICES',
+    '92': 'PUBLIC_ADMIN'
+}
 
- 
+RECESSION_PERIODS = [[date(1990, 7, 1), date(1991, 3, 1)],
+                     [date(2001, 3, 1), date(2001, 11, 1)],
+                     [date(2007, 12, 1), date(2009, 6, 1)]]
 
+def data_clean_up(records):
+    """Clean up NaN values and remove useless columns"""
+    new_records = copy.deepcopy(records)
+    #Remove useless columns
+    new_records = new_records.drop(columns=['Id', 'Name', 'BalanceGross'], axis=1)
+    #Clean up NaN Values
+    DEFAULT_MAPPING = { 'Bank': 'Unknown',
+                        'BankState': 'Unknown',
+                        'NewExist': 0, 
+                        'RevLineCr': 'Undefined',
+                        'LowDoc': 'Undefined',
+                      }
+    for col in new_records:
+        if col in DEFAULT_MAPPING:
+            new_records[col].fillna(DEFAULT_MAPPING.get(col), inplace=True)
+    new_records["DisbursementDate"] = new_records.apply(lambda x: x.ApprovalDate if str(x.DisbursementDate)=='nan' else x.DisbursementDate, axis=1)
+    new_records.reset_index(drop=True, inplace=True)
+    return new_records
 
-def filter_raw_data() -> Tuple:
-    df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
-    ids_to_remove = set()
-    for index, row in df.iterrows():
-        # remove role with nan value, 0 in NewExist, RevLineCr not in [Y, N], LowDoc not in [Y, N]
-        if row.isnull().any() or row['NewExist'] == 0 or row['RevLineCr'].strip() not in ['Y', 'N'] or row['LowDoc'].strip() not in ['Y', 'N']:
-            ids_to_remove.add(index)
-    return tuple(ids_to_remove)
+def with_in_recession(row):
+    # load is labeled as 'Y' for Recession if the load is active for at least a month during the Recession time frame
+    try:
+        raw_disbursement_date = str(row['DisbursementDate'])
+        if not pd.isnull(raw_disbursement_date):
+            disbursement_date = datetime.strptime(raw_disbursement_date.strip(), '%d-%b-%y').date()
+            term = int(row['Term']) if not pd.isnull(row['Term']) else 0
+            recession = False
+            for period in RECESSION_PERIODS:
+                if (disbursement_date <= period[0] and
+                    period[0] + timedelta(days=30) <= disbursement_date + timedelta(days=term*30)) or \
+                        (period[0] <= disbursement_date <= period[1] and
+                         disbursement_date + timedelta(days=30) <= period[1]):
+                    recession = True
+                    break
+            return 'Y' if recession else 'N'
+        else:
+            return 'N'
+    except:
+        return 'N'
 
+def data_transformation(records):
+    """Clean up dirty values, reformating number columns and create new features"""
+    records['Recession'] = records.apply(with_in_recession, axis=1)
+    records['NAICS'] = records['NAICS'].apply(lambda x: NAICS_TO_INDUSTRY.get(str(x)[0:2], 'NONE') if len(str(x)) >= 2 else 'NONE')
+    records['FranchiseCode'] = records['FranchiseCode'].apply(lambda x: 'N' if x in ['0', '1', 0, 1] else 'Y')
+    records['NewExist'] = records['NewExist'].apply(lambda x: str(x))
+    records['DisbursementGross'] = records['DisbursementGross'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['GrAppv'] = records['GrAppv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['SBA_Appv'] = records['SBA_Appv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['DisGross_GrAppv'] = records['DisbursementGross'] / records['GrAppv']
+    records['DisGross_SBAAppv'] = records['DisbursementGross'] / records['SBA_Appv']
+    records['GrAppv_SBAAppv'] = records['GrAppv'] / records['SBA_Appv']
+    records['ApprovalFY'] = records.ApprovalDate.apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').date())
+    records['RevLineCr'] = records.RevLineCr.apply(lambda x: "Undefined" if x in ('0','T') else x )
+    return records
 
-def process_x(ids: Tuple, source: str, destination: str):
-    x_df = pd.read_csv(source)
-    # FIXME: text columns is removed temporarily
-    cleaned_x_df = x_df.drop(list(ids)).drop(columns=['Id', 'Name', 'City', 'State', 'Zip', 'BankState', 'NAICS'])
-    # convert date to float
-    cleaned_x_df['ApprovalDate'] = cleaned_x_df['ApprovalDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').timestamp())
-    cleaned_x_df['ApprovalFY'] = cleaned_x_df['ApprovalFY'].apply(
-        lambda x: datetime.strptime(str(x).replace('A', '').strip(), '%Y').timestamp() if re.match(r'^\d{4}A$', str(x).strip()) else datetime.strptime(str(x).strip(), '%Y').timestamp())
-    cleaned_x_df['DisbursementDate'] = cleaned_x_df['DisbursementDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').timestamp() if not pd.isnull(x) else x)
-    # convert int to float
-    cleaned_x_df['Term'] = cleaned_x_df['Term'].apply(lambda x: float(x))
-    cleaned_x_df['NoEmp'] = cleaned_x_df['NoEmp'].apply(lambda x: float(x))
-    cleaned_x_df['CreateJob'] = cleaned_x_df['CreateJob'].apply(lambda x: float(x))
-    cleaned_x_df['RetainedJob'] = cleaned_x_df['RetainedJob'].apply(lambda x: float(x))
-    cleaned_x_df['FranchiseCode'] = cleaned_x_df['FranchiseCode'].apply(lambda x: float(x))
-    cleaned_x_df['UrbanRural'] = cleaned_x_df['UrbanRural'].apply(lambda x: float(x))
-    # remove $ and , from currency value
-    cleaned_x_df['DisbursementGross'] = cleaned_x_df['DisbursementGross'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
-    cleaned_x_df['BalanceGross'] = cleaned_x_df['BalanceGross'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
-    cleaned_x_df['GrAppv'] = cleaned_x_df['GrAppv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
-    cleaned_x_df['SBA_Appv'] = cleaned_x_df['SBA_Appv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
-    # convert categorical data into float
-    cleaned_x_df['RevLineCr'] = cleaned_x_df['RevLineCr'].map({'N': 0.0, 'Y': 1.0})
-    cleaned_x_df['LowDoc'] = cleaned_x_df['LowDoc'].map({'N': 0.0, 'Y': 1.0})
-    banks = cleaned_x_df['Bank'].unique()
-    banks_index = {banks[i]: float(i) for i in range(len(banks))}
-    cleaned_x_df['Bank'] = cleaned_x_df['Bank'].map(banks_index)
+def label_encoding(records):
+    """Convert Object into Categorical and do Label Encoding"""
+    new_records = copy.deepcopy(records)
+    for col in new_records.columns:
+        if new_records[col].dtype == object:
+            new_records[col] = new_records[col].astype('category')
+            new_records[col+'_Cat'] = new_records[col].cat.codes
+            new_records.drop(columns=[col], axis=1, inplace=True)
+    return new_records
 
-    cleaned_x_df.to_csv(destination, index=False)
+def all_preprocess_without_label_encoding(records):
+    records = data_clean_up(records)
+    records = data_transformation(records)
+    encoded_records = label_encoding(records)
+    return encoded_records
 
-
-def process_y(ids: Tuple, file_path: str):
-    y_df = pd.read_csv(file_path)
-    cleaned_y_df = y_df.drop(list(ids)).drop(columns=['Id'])
-    cleaned_y_df.to_csv('Ytrain.csv', index=False)
-
-
-if __name__ == '__main__':
-    ids_to_remove = filter_raw_data()
-    process_x(ids_to_remove, os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'), 'Xtrain.csv')
-    process_y(ids_to_remove, os.path.join(os.path.dirname(__file__), 'raw_data', 'Ytrain.csv'))
+def all_preprocess_with_label_encoding(records):
+    records = data_clean_up(records)
+    records = data_transformation(records)
+    encoded_records = label_encoding(records)
+    return encoded_records
