@@ -1,30 +1,137 @@
-import os
-from typing import Tuple
-
+import copy
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, date, timedelta
 
+CAT_FEATURES = ['City', 'State', 'Zip', 'Bank', 'BankState', 'NAICS', 'ApprovalDate', 'ApprovalFY',
+                'NewExist', 'FranchiseCode', 'UrbanRural', 'RevLineCr', 'LowDoc', 'DisbursementDate', 'Recession']
 
-def filter_raw_data() -> Tuple:
-    df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
-    ids_to_remove = set()
-    for index, row in df.iterrows():
-        # remove nan value
-        # remove 0 in NewExist
-        # TODO: should we remove 0 and T in RevLineCr
-        if row.isnull().any() or row['NewExist'] == 0:
-            ids_to_remove.add(index)
-    return tuple(ids_to_remove)
+NAICS_TO_INDUSTRY = {
+    '11': 'AGS',
+    '21': 'MINING',
+    '22': 'UTILITIES',
+    '23': 'CONSTRUCTION',
+    '31': 'MANUFACTURING',
+    '32': 'MANUFACTURING',
+    '33': 'MANUFACTURING',
+    '42': 'WHOLESALE_TRADE',
+    '44': 'RETAIL_TRADE',
+    '45': 'RETAIL_TRADE',
+    '48': 'TRANSPORTATION_WAREHOUSING',
+    '49': 'TRANSPORTATION_WAREHOUSING',
+    '51': 'INFORMATION',
+    '52': 'FINANCE_INSURANCE',
+    '53': 'REAL_ESTATE',
+    '54': 'SERVICES',
+    '55': 'MANAGEMENT',
+    '56': 'ADMIN',
+    '61': 'EDU',
+    '62': 'HEALTHCARE',
+    '71': 'ENTERTAINMENT',
+    '72': 'ACCOMMODATION_FOOD',
+    '81': 'OTHER_SERVICES',
+    '92': 'PUBLIC_ADMIN'
+}
 
+RECESSION_PERIODS = [[date(1990, 7, 1), date(1991, 3, 1)],
+                     [date(2001, 3, 1), date(2001, 11, 1)],
+                     [date(2007, 12, 1), date(2009, 6, 1)]]
 
-def save_cleaned_data(ids_to_remove: Tuple):
-    x_df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Xtrain.csv'))
-    y_df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'raw_data', 'Ytrain.csv'))
-    cleaned_x_df = x_df.drop(list(ids_to_remove))
-    cleaned_y_df = y_df.drop(list(ids_to_remove))
+def data_clean_up(records):
+    """Clean up NaN values and remove useless columns"""
+    new_records = copy.deepcopy(records)
+    #Remove useless columns
+    new_records = new_records.drop(columns=['Id', 'Name', 'BalanceGross'], axis=1)
+    #Clean up NaN Values
+    DEFAULT_MAPPING = { 'Bank': 'Unknown',
+                        'BankState': 'Unknown',
+                        'NewExist': 0, 
+                        'RevLineCr': 'Undefined',
+                        'LowDoc': 'Undefined',
+                      }
+    for col in new_records:
+        if col in DEFAULT_MAPPING:
+            new_records[col].fillna(DEFAULT_MAPPING.get(col), inplace=True)
+    new_records["LowDoc"] = new_records.apply(lambda x: 'Undefined' if str(x.LowDoc.strip()) not in ('Y', 'N') else str(x.LowDoc.strip()), axis=1)
+    new_records["RevLineCr"] = new_records.apply(lambda x: {'0': 'N', '0.0': 'N', 'T': 'Y'}.get(str(x.RevLineCr.strip()), 'N') if str(x.RevLineCr.strip()) not in ('Y', 'N', 'Undefined') else str(x.RevLineCr.strip()), axis=1)
+    new_records["DisbursementDate"] = new_records.apply(lambda x: x.ApprovalDate if str(x.DisbursementDate)=='nan' else x.DisbursementDate, axis=1)
+     
+    #Handle CreateJob and RetainedJob beofre 1986-09-30    
+    df = pd.DataFrame(columns=["ApprovalDate", "RetainedJob"])
+    df['ApprovalDate'] = new_records['ApprovalDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').date())
+    df['RetainedJob'] = new_records.RetainedJob
+    df['CreateJob'] = new_records.CreateJob
+    aveRetainedJob = np.average(df[df['ApprovalDate']>date(1986,9,30)]['RetainedJob'])
+    aveCreateJob = np.average(df[df['ApprovalDate']>date(1986,9,30)]['CreateJob'])
+    new_records['RetainedJob'] = df.apply(lambda x: aveRetainedJob 
+                                 if x.ApprovalDate <= date(1986,9,30) 
+                                 else x.RetainedJob, 
+                                 axis=1)
+    new_records['CreateJob'] = df.apply(lambda x: aveCreateJob 
+                                 if x.ApprovalDate <= date(1986,9,30) 
+                                 else x.CreateJob, 
+                                 axis=1)
+    
+    new_records.reset_index(drop=True, inplace=True)
+    return new_records
 
-    cleaned_x_df.to_csv(os.path.join(os.path.join(os.path.dirname(__file__), 'cleaned_data'), 'Xtrain.csv'))
-    cleaned_y_df.to_csv(os.path.join(os.path.join(os.path.dirname(__file__), 'cleaned_data'), 'Ytrain.csv'))
+def with_in_recession(row):
+    # load is labeled as 'Y' for Recession if the load is active for at least a month during the Recession time frame
+    try:
+        raw_disbursement_date = str(row['DisbursementDate'])
+        if not pd.isnull(raw_disbursement_date):
+            disbursement_date = datetime.strptime(raw_disbursement_date.strip(), '%d-%b-%y').date()
+            term = int(row['Term']) if not pd.isnull(row['Term']) else 0
+            recession = False
+            for period in RECESSION_PERIODS:
+                if (disbursement_date <= period[0] and
+                    period[0] + timedelta(days=30) <= disbursement_date + timedelta(days=term*30)) or \
+                        (period[0] <= disbursement_date <= period[1] and
+                         disbursement_date + timedelta(days=30) <= period[1]):
+                    recession = True
+                    break
+            return 'Y' if recession else 'N'
+        else:
+            return 'N'
+    except:
+        return 'N'
 
+def data_transformation(records):
+    """Clean up dirty values, reformating number columns and create new features"""
+    # existing features
+    records['Zip'] = records['Zip'].apply(lambda x: str(x))
+    records['NAICS'] = records['NAICS'].apply(lambda x: NAICS_TO_INDUSTRY.get(str(x)[0:2], 'NONE') if len(str(x)) >= 2 else 'NONE')
+    records['FranchiseCode'] = records['FranchiseCode'].apply(lambda x: 'N' if x in ['0', '1', 0, 1] else 'Y')
+    records['NewExist'] = records['NewExist'].apply(lambda x: str(x))
+    records['DisbursementGross'] = records['DisbursementGross'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['GrAppv'] = records['GrAppv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['SBA_Appv'] = records['SBA_Appv'].apply(lambda x: float(x.replace('$', '').replace(',', '').strip()))
+    records['ApprovalFY'] = records.ApprovalDate.apply(lambda x: str(datetime.strptime(x.strip(), '%d-%b-%y').year))
 
-if __name__ == '__main__':
-    save_cleaned_data(filter_raw_data())
+    # new features
+    records['Recession'] = records.apply(with_in_recession, axis=1)
+    records['GrAppv_SBAAppv'] = records['SBA_Appv'] / records['GrAppv']
+
+    return records
+
+def label_encoding(records):
+    """Convert Object into Categorical and do Label Encoding"""
+    new_records = copy.deepcopy(records)
+    for col in new_records.columns:
+        if new_records[col].dtype == object:
+            new_records[col] = new_records[col].astype('category')
+            new_records[col+'_Cat'] = new_records[col].cat.codes
+            new_records.drop(columns=[col], axis=1, inplace=True)
+    return new_records
+
+def all_preprocess_without_label_encoding(records):
+    records = data_clean_up(records)
+    records = data_transformation(records)
+    return records
+
+def all_preprocess_with_label_encoding(records):
+    records = data_clean_up(records)
+    records = data_transformation(records)
+    encoded_records = label_encoding(records)
+    return encoded_records
