@@ -94,9 +94,7 @@ def data_transformation(records):
 
     # new features
     records['Recession'] = records.apply(with_in_recession, axis=1)
-    # records['DisGross_GrAppv'] = records['DisbursementGross'] / records['GrAppv']
-    # records['DisGross_SBAAppv'] = records['DisbursementGross'] / records['SBA_Appv']
-    # records['GrAppv_SBAAppv'] = records['GrAppv'] / records['SBA_Appv']
+    records['GrAppv_SBAAppv'] = records['SBA_Appv'] / records['GrAppv']
 
     return records
 
