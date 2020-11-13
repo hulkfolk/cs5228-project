@@ -56,6 +56,23 @@ def data_clean_up(records):
     new_records["LowDoc"] = new_records.apply(lambda x: 'Undefined' if str(x.LowDoc.strip()) not in ('Y', 'N') else str(x.LowDoc.strip()), axis=1)
     new_records["RevLineCr"] = new_records.apply(lambda x: {'0': 'N', '0.0': 'N', 'T': 'Y'}.get(str(x.RevLineCr.strip()), 'N') if str(x.RevLineCr.strip()) not in ('Y', 'N', 'Undefined') else str(x.RevLineCr.strip()), axis=1)
     new_records["DisbursementDate"] = new_records.apply(lambda x: x.ApprovalDate if str(x.DisbursementDate)=='nan' else x.DisbursementDate, axis=1)
+     
+    #Handle CreateJob and RetainedJob beofre 1986-09-30    
+    df = pd.DataFrame(columns=["ApprovalDate", "RetainedJob"])
+    df['ApprovalDate'] = new_records['ApprovalDate'].apply(lambda x: datetime.strptime(x.strip(), '%d-%b-%y').date())
+    df['RetainedJob'] = new_records.RetainedJob
+    df['CreateJob'] = new_records.CreateJob
+    aveRetainedJob = np.average(df[df['ApprovalDate']>date(1986,9,30)]['RetainedJob'])
+    aveCreateJob = np.average(df[df['ApprovalDate']>date(1986,9,30)]['CreateJob'])
+    new_records['RetainedJob'] = df.apply(lambda x: aveRetainedJob 
+                                 if x.ApprovalDate <= date(1986,9,30) 
+                                 else x.RetainedJob, 
+                                 axis=1)
+    new_records['CreateJob'] = df.apply(lambda x: aveCreateJob 
+                                 if x.ApprovalDate <= date(1986,9,30) 
+                                 else x.CreateJob, 
+                                 axis=1)
+    
     new_records.reset_index(drop=True, inplace=True)
     return new_records
 
