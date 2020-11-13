@@ -1,4 +1,10 @@
 # cs5228-project
 - required packages:\
-    keras\
-    tensorflow
+    pandas\
+    numpy\
+    catboost\
+    lightgbm\
+    xgboost\
+    sklearn\
+    matplotlib\
+    
